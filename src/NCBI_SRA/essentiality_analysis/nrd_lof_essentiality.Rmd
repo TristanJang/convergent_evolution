@@ -1,0 +1,104 @@
+---
+title: "nrd_test"
+output: html_document
+date: "2024-07-17"
+---
+
+```{r}
+essential_input <- fread("Z:/time_course_BDQ/NCBI_SRA/essentiality_analysis/essential_genes_DeJesus_2017_Table_S3.csv")
+essential_genes <- essential_input[`Final Call` %in% c("ES", "ESD", "GD")]$`ORF ID`  # consider essential genes, essential domains (genes with both essential region and nonessential regions), and growth-defect genes to all be essential. Use ORF ID aka locus tag 
+non_essential_genes <- essential_input[`Final Call` %in% c("NE", "GA")]$`ORF ID`  # consider essential genes and growth-advantage genes non-essential. uncertain genes and genes not in the table are not considered.
+included_genes <- c(essential_genes, non_essential_genes)  # uncertain genes and genes not in the essential genes table are excluded from analysis
+essential_input <- NULL
+
+# NRD genes
+nrd_genes <- c("Rv0678", "Rv1979c", "Rv3547", "Rv2535c", "Rv3261", "Rv3262", "Rv1173", "Rv2983", "Rv0407", "Rv1305", "EBG00000313339", "Rv0701", "Rv0702")
+nrd_genes_ne <- c("Rv0678", "Rv1979c", "Rv3547", "Rv2535c", "Rv3261", "Rv3262", "Rv1173", "Rv2983", "Rv0407")
+nrd_genes_es <- c("Rv1305", "EBG00000313339", "Rv0701", "Rv0702")
+intersect(nrd_genes_es, essential_genes)  # test that the essential and non-essential NRD genes are in the essential and non-essential gene lists from the essentiality table
+intersect(nrd_genes_ne, non_essential_genes)
+intersect(nrd_genes_ne, essential_genes)
+intersect(nrd_genes_es, non_essential_genes)
+essential_genes_not_nrd <- setdiff(essential_genes, nrd_genes_es)  # create an exclusive list of essential and non-essential genes without the NRD genes. so they can be compared with the NRD genes without double counting.
+non_essential_genes_not_nrd <- setdiff(non_essential_genes, nrd_genes_ne)
+
+# read consensus short variants for consensus frameshifts and consensus early stops
+consensus_short_variants <- fread("Y:/data/depot/new-rep-drugs/nrd-merged-vcf-pass.csv")
+isolates <- fread("Z:/time_course_BDQ/NCBI_SRA/essentiality_analysis/isolates-nrd.txt", header = F)
+isolates <- isolates$V1
+
+# extract frameshift mutations, convert table to long form, 
+frameshifts_cons <- consensus_short_variants[grep("frameshift", Consequence)]
+fs_cons <- data.table(gather(frameshifts_cons, isolate, presence, 14:422))
+fs_cons <- fs_cons[presence==1]
+fs_cons <- fs_cons[Gene %in% included_genes, c("Gene", "isolate")]  # remove some genes we don't have essentiality data on
+fs_cons <- fs_cons[!duplicated(fs_cons)]  # remove duplicates (which come from multiple frameshift mutations in the same gene in the same isolate)
+# use long form table to count for each gene the number of isolates with at least one frameshift in that gene
+fs_cons_by_gene <- data.table(table(fs_cons$Gene))  # number of times each gene appears in fs_cons = the number of isolates with at least one frameshift in that gene (now that we've removed the duplicated isolate gene pairs)
+colnames(fs_cons_by_gene) <- c("Gene", "Count")
+no_fs_cons_genes <- data.table(Count=0, Gene=setdiff(included_genes, fs_cons_by_gene$Gene)) # the genes not in fs_cons have a frameshift in 0 isolates. 
+fs_cons_by_gene <- rbind(fs_cons_by_gene, no_fs_cons_genes)
+frameshifts_cons <- NULL
+# use long form table to count for each isolate the number of genes with at least one frameshift in each gene set (essential, nonessential, essential nrd, nonessential nrd)
+fs_cons$Gene_Group <- "error"
+fs_cons[Gene %in% essential_genes]$Gene_Group <- "Essential"
+fs_cons[Gene %in% nrd_genes_es]$Gene_Group <- "NRD_Essential"
+fs_cons[Gene %in% non_essential_genes]$Gene_Group <- "Non_Essential"
+fs_cons[Gene %in% nrd_genes_ne]$Gene_Group <- "NRD_Non_Essential"
+setkey(fs_cons, isolate, Gene_Group)
+fs_cons_by_iso <- fs_cons[CJ(isolate, Gene_Group, unique = T), .N, by=.EACHI]
+colnames(fs_cons_by_iso) <- c("Isolate", "Gene_Group", "Count")
+
+# now do the same for early stops
+early_stop_cons <- consensus_short_variants[grep("stop_gained", Consequence)]
+stop_cons <- data.table(gather(early_stop_cons, isolate, presence, 14:422))
+stop_cons <- stop_cons[presence==1,]
+stop_cons <- stop_cons[Gene %in% included_genes, c("Gene", "isolate")]  
+stop_cons <- stop_cons[!duplicated(stop_cons),]  
+stop_cons_by_gene <- data.table(table(stop_cons$Gene))  
+colnames(stop_cons_by_gene) <- c("Gene", "Count")
+no_stop_cons_genes <- data.table(Count=0, Gene=setdiff(included_genes, stop_cons_by_gene$Gene)) 
+stop_cons_by_gene <- rbind(stop_cons_by_gene, no_stop_cons_genes)
+stop_cons_by_gene <- stop_cons_by_gene[Gene %in% included_genes]  
+early_stop_cons <- NULL
+consensus_short_variants <- NULL
+stop_cons$Gene_Group <- "error"
+stop_cons[Gene %in% essential_genes]$Gene_Group <- "Essential"
+stop_cons[Gene %in% nrd_genes_es]$Gene_Group <- "NRD_Essential"
+stop_cons[Gene %in% non_essential_genes]$Gene_Group <- "Non_Essential"
+stop_cons[Gene %in% nrd_genes_ne]$Gene_Group <- "NRD_Non_Essential"
+setkey(stop_cons, isolate, Gene_Group)
+stop_cons_by_iso <- stop_cons[CJ(isolate, Gene_Group, unique = T), .N, by=.EACHI]
+stop_cons[Gene_Group=="NRD_Non_Essential"]
+stop_cons_by_iso[Gene_Group=="NRD_Non_Essential" & N>0]
+colnames(stop_cons_by_iso) <- c("Isolate", "Gene_Group", "Count")
+
+# combine for total LOF mutation isolate count per gene
+lof_gene_pairs <- rbind(fs_cons, stop_cons)
+lof_gene_pairs <- lof_gene_pairs[!duplicated(lof_gene_pairs),]
+lof_counts <- data.table(table(lof_gene_pairs$Gene))  
+colnames(lof_counts) <- c("Gene", "Count")
+no_lof <- data.table(Count=0, Gene=setdiff(included_genes, lof_counts$Gene)) 
+lof_counts <- rbind(lof_counts, no_lof)
+lof_counts <- lof_counts[Gene %in% included_genes]  
+
+
+
+# first sanity check that frameshifts are more frequent in non-essential genes
+t.test(lof_counts[Gene %in% essential_genes]$Count, lof_counts[Gene %in% non_essential_genes]$Count)
+t.test(fs_cons_by_gene[Gene %in% essential_genes]$Count, fs_cons_by_gene[Gene %in% non_essential_genes]$Count)
+t.test(stop_cons_by_gene[Gene %in% essential_genes]$Count, stop_cons_by_gene[Gene %in% non_essential_genes]$Count)
+median(fs_cons_by_gene[Gene %in% essential_genes]$Count)
+median(fs_cons_by_gene[Gene %in% non_essential_genes]$Count)
+nrow(fs_cons_by_gene[(Count>=100)&(Gene %in% essential_genes)])
+nrow(fs_cons_by_gene[(Count>=100)&(Gene %in% non_essential_genes)])
+nrow(stop_cons_by_gene[(Count>=100)&(Gene %in% essential_genes)])
+nrow(stop_cons_by_gene[(Count>=100)&(Gene %in% non_essential_genes)])
+wilcox.test(lof_counts[Gene %in% essential_genes]$Count, lof_counts[Gene %in% non_essential_genes]$Count)
+wilcox.test(fs_cons_by_gene[Gene %in% essential_genes]$Count, fs_cons_by_gene[Gene %in% non_essential_genes]$Count)
+wilcox.test(stop_cons_by_gene[Gene %in% essential_genes]$Count, stop_cons_by_gene[Gene %in% non_essential_genes]$Count)
+
+
+```
+```{r}
+```
