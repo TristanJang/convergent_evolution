@@ -1,0 +1,16 @@
+import os
+grouphome = os.environ['GROUPHOME']
+ISOLATES = [i for i in open('/home/tjang8858/time_course_BDQ/NCBI_SRA/SV_arisal/isolates.txt').read().split('\n') if len(i) > 0]
+
+rule All:
+    input:
+        expand("/home/tjang8858/time_course_BDQ/NCBI_SRA/SV_arisal/blast/IS6110_{isolate}.aln", isolate = ISOLATES)
+
+rule IS_search:
+    input:
+        "/home/tjang8858/time_course_BDQ/NCBI_SRA/SV_arisal/genomes/{isolate}.fasta"
+    output:
+        "/home/tjang8858/time_course_BDQ/NCBI_SRA/SV_arisal/blast/IS6110_{isolate}.aln"
+    shell:
+        """bash ./IS6110_search.sh {input}"""
+
