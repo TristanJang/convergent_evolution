@@ -1,0 +1,114 @@
+---
+title: "convergent svs"
+output: html_document
+date: "2024-07-29"
+---
+
+```{r}
+#import necessary libraries
+library(data.table)
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+
+```
+
+```{r}
+#import input files, svs and lineage calls and then combine into one 
+lineages <- read_tsv("Z:/time_course_BDQ/NCBI_SRA/convergent_svs/lineages_all_sra.tsv")
+lineages <- lineages[seq(1, nrow(lineages), by = 2), 1:3] #keep every other row and only first 3 columns
+lineages$freschi2020 <- substr(lineages$freschi2020, 0, 3) #keep only 1 place after decimal for lineage calls
+lineages$freschi2020 <- ifelse(lineages$coll2014 == "lineageBOV_AFRI", "bovis", lineages$freschi2020) #for bovis calls, move them into freschi column since only coll2014 called it
+lineages <- lineages %>% select(-coll2014) # remove coll2014 column
+
+structural_variants <- read_tsv("Z:/time_course_BDQ/NCBI_SRA/essentiality_analysis/output.txt")
+structural_variants <- structural_variants %>%
+  mutate(SVLen = if_else(SVType == "INS",
+                         as.numeric(str_extract(Variant, "(?<=SVLEN=)\\d+")),
+                         SVLen))
+structural_variants <- subset(structural_variants,SVLen >= -100000 & SVLen <= 100000)# & SVLen != 0)
+structural_variants <- structural_variants[!grepl("IMPRECISE", structural_variants$Variant), ]
+
+#structural_variants <- read_tsv("Z:/time_course_BDQ/NCBI_SRA/essentiality_analysis/merged_sra_Rv.vcf")
+merged_table <- structural_variants %>%
+  left_join(lineages, by = "Isolate")
+
+```
+
+```{r}
+# Function to find convergent variants across lineages
+find_convergent_variants <- function(df) {
+  result <- list()
+  
+  # Iterate through each variant in the table
+  for (i in 1:nrow(df)) {
+    current_variant <- df[i, ]
+    
+    # Find variants across different lineages within 500 bases
+    convergent_variants <- df %>%
+      filter(
+        Gene == current_variant$Gene &  # Same gene
+        freschi2020 != current_variant$freschi2020  # Different lineages
+      )
+    
+    if (nrow(convergent_variants) > 0) {
+      # Add the current variant to convergent ones
+      all_variants <- rbind(current_variant, convergent_variants)
+      
+      # Summarize the results
+      summary_result <- data.frame(
+        SV = paste0(current_variant$SVStart, "-", current_variant$SVStop),
+        SVType = current_variant$SVType,
+        Gene = current_variant$Gene,
+        Isolates = paste(unique(all_variants$Isolate), collapse = ", "),
+        Lineages = paste(unique(all_variants$freschi2020), collapse = ", ")
+      )
+      
+      result[[i]] <- summary_result
+    }
+  }
+  
+  # Combine all results into a single data frame
+  final_result <- do.call(rbind, result)
+  
+  return(final_result)
+}
+
+# Apply the function to the entire merged table
+convergent_variants_list <- find_convergent_variants(merged_table)
+```
+
+```{r}
+length(unique(lineages[["freschi2020"]]))
+# Filter rows where the number of elements in Lineages is greater than 2
+filtered_table <- convergent_variants_list %>%
+  filter(str_count(Lineages, ",") >= 3)
+
+#nrow(merged_table[merged_table$SVType == "INS",])
+#get number of unique genes with convergent evolution of svs and make a table 
+length(unique(filtered_table[["Gene"]]))
+convergent_sv_genes <- data.table(unique(filtered_table[["Gene"]]))
+# Write the filtered data to a text file
+```
+```{r}
+print(colnames(convergent_variants_list))
+
+plcA <- convergent_variants_list[convergent_variants_list$Gene %in% c("plcA"), ]
+plcB <- convergent_variants_list[convergent_variants_list$Gene %in% c("plcB"), ]
+plcC <- convergent_variants_list[convergent_variants_list$Gene %in% c("plcC"), ]
+plcD <- convergent_variants_list[convergent_variants_list$Gene %in% c("plcD"), ]
+
+#genes_to_write <- as.character(convergent_sv_genes$V1)
+#writeLines(genes_to_write, con = "lenient_convergent_sv_genes.txt")
+```
+
+```{r}
+# Split the strings by comma, unlist them, and get unique values
+unique_values <- unique(unlist(strsplit(plcC$Lineages, ",")))
+
+# Count the number of unique values
+num_unique_values <- length(unique_values)
+
+# Display the result
+print(num_unique_values)
+```
