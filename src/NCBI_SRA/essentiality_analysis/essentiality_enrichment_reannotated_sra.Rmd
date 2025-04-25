@@ -1,0 +1,174 @@
+---
+title: "essentiality enrichment"
+output: html_document
+date: "2024-07-12"
+---
+
+```{r}
+library(data.table)
+library(tidyr)
+library(ggplot2)
+library(ggthemes)
+library(tidyverse)
+library(readxl)
+library(dplyr)
+library(stringr)
+```
+
+```{r}
+# read and extract vector of essential and non-essential genes
+essential_input <- read_excel("Z:/time_course_BDQ/NCBI_SRA/essentiality_analysis/essential_genes_Zhang_2012.xlsx")
+#pull essential genes, both standard name and Rv Number and pool them
+essential_input <- essential_input %>% mutate(Gene = ifelse(Gene == "-", `Rv Number`, Gene))
+essential_genes <- essential_input %>%
+  filter(Call %in% c("E", "D")) %>%
+  select(Gene)
+#essential_rv_numbers <- essential_input %>%
+  #filter(Call %in% c("E", "D")) %>%
+  #select(`Rv Number`)
+#names(essential_rv_numbers)[names(essential_rv_numbers) == "Rv Number"] <- "Gene"
+#essential_combined <- rbind(essential_genes, essential_rv_numbers)
+#now the same thing for non-essential genes
+non_essential_genes <- essential_input %>%
+  filter(Call %in% c("NE")) %>%
+  select(Gene)
+#non_essential_rv_numbers <- essential_input %>%
+  #filter(Call %in% c("NE")) %>%
+  #select(`Rv Number`)
+#names(non_essential_rv_numbers)[names(non_essential_rv_numbers) == "Rv Number"] <- "Gene"
+#non_essential_combined <- rbind(non_essential_genes, non_essential_rv_numbers)
+included_genes <- c(essential_genes, non_essential_genes)  # uncertain genes and genes not in the essential genes table are excluded from analysis
+included_genes<- unlist(included_genes)
+#load up merged SV data (annotated), as well as all the isolate names
+structural_variants <- read_tsv("Z:/time_course_BDQ/NCBI_SRA/essentiality_analysis/output.txt")
+#fix sv insertion length by pulling info from variant column
+structural_variants <- structural_variants %>%
+  mutate(SVLen = if_else(SVType == "INS",
+                         as.numeric(str_extract(Variant, "(?<=SVLEN=)\\d+")),
+                         SVLen))
+#remove svs larger than 100000 bp
+structural_variants <- subset(structural_variants,SVLen >= -100000 & SVLen <= 100000)# & SVLen != 0)
+structural_variants <- structural_variants[!grepl("IMPRECISE", structural_variants$Variant), ] #remove imprecise svs
+
+#keep only coding sequence variants
+#structural_variants <- structural_variants %>% 
+  #filter(str_detect(Consequence, "coding_sequence_variant"))
+pacbio_isolates <- fread("Z:/assembly/pacbio_sra_complete_final.txt", header = F)
+nanopore_isolates <- fread("Z:/assembly/nanopore_sra_complete_final.txt", header = F)
+isolates <- rbind(pacbio_isolates,nanopore_isolates)
+isolates <- isolates$V1
+```
+```{r}
+# Extract structural variants and convert table to long form
+#svs_table <- structural_variants[grep("SV", Consequence)]
+#svs_table <- data.table(gather(structural_variants, isolate, presence, 14:291))
+#svs_table <- svs_table[presence == 1] 
+#included_genes <- list(essential_combined = essential_combined, non_essential_combined = non_essential_combined)
+essential_genes <- unlist(essential_genes)
+non_essential_genes <- unlist(non_essential_genes)
+svs_essential <- structural_variants[structural_variants$Gene %in% essential_genes, c("Gene", "Isolate")]
+svs_non_essential <- structural_variants[structural_variants$Gene%in% non_essential_genes, c("Gene", "Isolate")]
+svs_all<-rbind(svs_essential,svs_non_essential)
+colnames(svs_all) <- c("Gene","isolate")
+svs_all$Gene_Group <- "error"
+svs_all$Gene_Group[svs_all$Gene %in% essential_genes] <- "Essential"
+svs_all$Gene_Group[svs_all$Gene %in% non_essential_genes] <- "Non_Essential"# Use long form table to count for each gene the number of isolates with at least one structural variant in that gene 
+#generate file that counts essential vs non essential svs by isolate 
+#setkey(svs_all, isolate, Gene_Group)
+#svs_by_iso <- svs_all[CJ(isolate, Gene_Group, unique = T), .N, by=.EACHI]
+#colnames(svs_by_iso) <- c("Isolate", "Gene_Group", "Count")
+```
+```{r}
+# use long form table to count for each gene the number of isolates with at least one SV in that gene
+svs_by_gene <- data.table(table(structural_variants$Gene)) # number of times each gene appears in structural_variants = the number of isolates with at least one sv in that gene (now that we've removed the duplicated isolate gene pairs)
+colnames(svs_by_gene) <- c("Gene", "Count") 
+quantile(svs_by_gene$Count)
+no_svs_genes <- data.table(Gene = setdiff(included_genes, svs_by_gene$Gene), Count = 0)# the genes not in svs_by_gene have an SV in 0 isolates. 
+#svs_by_gene <- rbind(svs_by_gene, no_svs_genes)
+# Graphs comparing SV rates between Essential and Non-essential Genes (isolate counts by gene)
+svs_by_gene$Group <- "Error"
+svs_by_gene[Gene %in% essential_genes]$Group <- "Essential"
+svs_by_gene[Gene %in% non_essential_genes]$Group <- "Nonessential"
+svs_by_gene_no_error<-subset(svs_by_gene,svs_by_gene$Group != "Error") #& svs_by_gene$Count != "0")
+p <- ggplot(svs_by_gene_no_error, aes(y=Count, x=Group, color=Group))
+p <- p + geom_violin() #+ geom_jitter(alpha=0.2)
+p <- p + xlab("Gene Group") + ylab("Structural Variant Count (by Gene)") + theme(legend.position="none") + scale_y_log10()  # Set y-axis to log scale #+ ylim(0,25)
+p 
+#ggsave("Z:/time_course_BDQ/NCBI_SRA/essentiality_analysis/essential_vs_non_essential.png")
+
+```
+
+```{r}
+#test whether SVs are more frequent in non-essential genes
+t.test(svs_by_gene[Gene %in% essential_genes]$Count, svs_by_gene[Gene %in% non_essential_genes]$Count)
+median(svs_by_gene[Gene %in% essential_genes]$Count)
+median(svs_by_gene[Gene %in% non_essential_genes]$Count)
+nrow(svs_by_gene[(Count>=100)&(Gene %in% essential_genes)])
+nrow(svs_by_gene[(Count>=100)&(Gene %in% non_essential_genes)])
+wilcox.test(svs_by_gene[Gene %in% essential_genes]$Count, svs_by_gene[Gene %in% non_essential_genes]$Count)
+```
+```{r}
+
+```
+```{r}
+ggplot(svs_by_gene[Gene %in% essential_genes],aes(x=Count))+geom_histogram(binwidth=1)+xlim(0,20)
+ggplot(svs_by_gene[Gene %in% non_essential_genes],aes(x=Count))+geom_histogram(binwidth=1)+xlim(0,20)
+```
+```{r}
+p <- ggplot(svs_by_gene[Gene %in% essential_genes]$Count], aes(x=Count, Fill=Group))
+p <- p + geom_histogram(binwidth = 1) + theme_tufte(base_size = 16)
+p <- p + xlab("Frameshift Frequency in Nonessential Genes (Isolate Count)") + ylab("Genes")
+p 
+p <- ggplot(fs_cons_by_gene[Group=="Essential"], aes(x=Count, Fill=Group))
+p <- p + geom_histogram(binwidth = 1) + theme_tufte(base_size = 16)
+p <- p + xlab("Frameshift Frequency in Essential Genes (Isolate Count)") + ylab("Genes")
+p 
+p <- ggplot(fs_cons_by_gene[Group %in% c("Essential", "Other_Nonessential")], aes(y=Count, x=Group))
+p <- p + geom_boxplot()
+p <- p + xlab("Frameshift Frequency (Isolate Count)") + theme_tufte(base_size = 24)
+p 
+#ggsave("Y:/workspace/nrd/gcdd-sweden/new-repurposed-drug-resistance/data/pre_prog_use/enrichment/fs_ess_isocount.png", width = 15, height = 12, units = 'in', dpi = 300)
+
+```
+```{r}
+filtered_data <- svs_by_gene %>% 
+  filter(Count > 2)
+# Write the filtered data to a text file
+genes_to_write <- as.character(filtered_data$Gene)
+writeLines(genes_to_write, con = "genes_over_2.txt")
+```
+```{r}
+mean(svs_by_gene[Gene %in% essential_genes]$Count)
+mean(svs_by_gene[Gene %in% non_essential_genes]$Count)
+mean(svs_by_gene$Count)
+sd(svs_by_gene$Count)
+no_outliers <- subset(svs_by_gene, Count < 400)
+mean(no_outliers$Count)
+sd(no_outliers$Count)
+
+boxplot(svs_by_gene$Count)
+```
+
+```{r prevalence}
+#looking at prevalence of fbiC deletion
+fbiC_deletions <- subset(structural_variants, SVType == "DEL" & Gene == "fbiC")
+#prevalence of svs in resistance genes
+resistance_genes <- c('mmpR5','Rv0678','pepQ','Rv2535c','atpE','Rv1305','Rv1979c','ddn','Rv3547','fgd1','Rv0407','fbiA','Rv3261','fbiB','Rv3262','fbiC','Rv1173','fbiD','Rv2983','rplC','Rv0701','rplD','Rv0702','rrl')
+subset_df <- structural_variants %>%
+  filter(Gene %in% resistance_genes)
+```
+
+```{r essential}
+essential_sorted<-structural_variants[structural_variants$Gene %in% essential_genes,]
+counts <- table(essential_sorted$SVType)
+print(counts)
+# Filter and sort the data frame
+essential_counts <- svs_by_gene %>%
+  filter(Group == "Essential") %>%
+  arrange(desc(Count))  # Use `arrange(Count)` for ascending order
+#write.xlsx(essential_counts, 'essential_counts.xlsx')
+#write.xlsx(essential_sorted, 'essential_svs.xlsx')
+indels_essential<-essential_sorted[essential_sorted$SVType %in% c("INS","DEL"),]
+write.xlsx(indels_essential, 'indels_essential.xlsx')
+
+```
