@@ -1,0 +1,26 @@
+import os
+grouphome = os.environ['GROUPHOME']
+ISOLATES = [i for i in open('/home/tjang8858/assembly/pacbio_sra_complete_final.txt').read().split('\n') if len(i) > 0]
+
+
+rule All:
+    input:
+        expand(grouphome + "/data/depot/public-genomes-reference/pacbio/structural_variants/{isolate}_sorted.vcf.gz", isolate=ISOLATES),
+        expand(grouphome + "/data/depot/public-genomes-reference/pacbio/structural_variants/{isolate}_sorted.vcf.gz.tbi", isolate=ISOLATES)
+
+rule sort:
+    input:
+        grouphome + "/data/depot/public-genomes-reference/pacbio/structural_variants/{isolate}_sample.vcf",
+    output:
+        grouphome + "/data/depot/public-genomes-reference/pacbio/structural_variants/{isolate}_sorted.vcf.gz"
+    shell:
+        """bcftools sort {input} -O z -o {output}"""
+rule index:
+    input:
+        grouphome + "/data/depot/public-genomes-reference/pacbio/structural_variants/{isolate}_sorted.vcf.gz",
+    output:
+        grouphome + "/data/depot/public-genomes-reference/pacbio/structural_variants/{isolate}_sorted.vcf.gz.tbi"
+    shell:
+        """bcftools index -t {input} -o {output}"""
+
+
