@@ -1,0 +1,34 @@
+import os
+grouphome = os.environ['GROUPHOME']
+ISOLATES = [i for i in open('/grp/valafar/data/nihtransfer/sra_nanopore/filtered_fastq_files.txt').read().split('\n') if len(i) > 0]
+
+rule All:
+    input:
+        expand(grouphome + "/data/depot/public-genomes-reference/nanopore/alignments/{isolate}_Rv_aligned.sam", isolate = ISOLATES),
+        expand(grouphome + "/data/depot/public-genomes-reference/nanopore/alignments/{isolate}_Rv_aligned.bam", isolate= ISOLATES),
+        expand(grouphome+ "/data/depot/public-genomes-reference/nanopore/alignments/{isolate}_Rv_aligned.bam.bai", isolate = ISOLATES)
+
+#initial read QC
+rule align:
+    input:
+        grouphome + "/data/nihtransfer/sra_nanopore/{isolate}.fastq"
+    output:
+        grouphome + "/data/depot/public-genomes-reference/nanopore/alignments/{isolate}_Rv_aligned.sam"
+    shell:
+        """minimap2 -ax map-pb -t 16 /grp/valafar/resources/H37Rv.fasta {input} > {output}"""
+
+rule convert:
+    input:
+        grouphome + "/data/depot/public-genomes-reference/nanopore/alignments/{isolate}_Rv_aligned.sam"
+    output:
+        grouphome + "/data/depot/public-genomes-reference/nanopore/alignments/{isolate}_Rv_aligned.bam"
+    shell:
+        """samtools sort -O bam -o {output} {input}"""
+
+rule index:
+    input:
+        grouphome + "/data/depot/public-genomes-reference/nanopore/alignments/{isolate}_Rv_aligned.bam"
+    output:
+        grouphome + "/data/depot/public-genomes-reference/nanopore/alignments/{isolate}_Rv_aligned.bam.bai"
+    shell:
+        """samtools index -b {input} -o {output}"""
